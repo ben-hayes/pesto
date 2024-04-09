@@ -14,8 +14,15 @@ def reduce_activations(activations: torch.Tensor, reduction: str = "alwa") -> to
     """
     device = activations.device
     num_bins = activations.size(-1)
-    bps, r = divmod(num_bins, 128)
-    assert r == 0, f"Activations should have output size 200*bins_per_semitone, got {num_bins}."
+
+    if num_bins % 128 == 0 and num_bins % 200 != 0:
+        bps, _ = divmod(num_bins, 128)
+    elif num_bins % 200 == 0 and num_bins % 128 != 0:
+        bps, _ = divmod(num_bins, 200)
+    elif num_bins % 200 == 0 and num_bins % 128 == 0:
+        raise ValueError("Ambiguous number of bins, could be either 128*bins_per_semitone or 200*bins_per_semitone.")
+    else:
+        raise ValueError("Invalid number of bins, should be either 128*bins_per_semitone or 200*bins_per_semitone.")
 
     if reduction == "argmax":
         pred = activations.argmax(dim=-1)
