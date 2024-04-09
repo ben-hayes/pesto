@@ -3,6 +3,7 @@ from typing import Any, Mapping, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+from fft_conv_pytorch import fft_conv
 
 from .utils import CropCQT
 from .utils import reduce_activations
@@ -22,7 +23,9 @@ class ToeplitzLinear(nn.Conv1d):
         )
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        return super(ToeplitzLinear, self).forward(input.unsqueeze(-2)).squeeze(-2)
+        input = input.unsqueeze(-2)
+        output = fft_conv(input, self.weight, bias=self.bias)
+        return output.squeeze(-2)
 
 
 class Resnet1d(nn.Module):

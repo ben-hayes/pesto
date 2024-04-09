@@ -25,7 +25,8 @@ dependencies = [
     'scipy>=1.8.1',
     'tqdm>=4.66.1',
     'torch>=2.0.1',
-    'torchaudio>=2.0.2'
+    'torchaudio>=2.0.2',
+    'fft-conv-pytorch>=1.2.0',
 ]
 
 [project.optional-dependencies]
