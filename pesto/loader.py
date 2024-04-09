@@ -7,9 +7,9 @@ from .data import Preprocessor
 from .model import PESTO, Resnet1d
 
 
-def load_model(checkpoint: str,
-               step_size: float,
-               sampling_rate: Optional[int] = None) -> PESTO:
+def load_model(
+    checkpoint: str, step_size: float, sampling_rate: Optional[int] = None
+) -> PESTO:
     r"""Load a trained model from a checkpoint file.
     See https://github.com/SonyCSLParis/pesto-full/blob/master/src/models/pesto.py for the structure of the checkpoint.
 
@@ -24,9 +24,13 @@ def load_model(checkpoint: str,
     if os.path.exists(checkpoint):  # handle user-provided checkpoints
         model_path = checkpoint
     else:
-        model_path = os.path.join(os.path.dirname(__file__), "weights", checkpoint + ".ckpt")
+        model_path = os.path.join(
+            os.path.dirname(__file__), "weights", checkpoint + ".ckpt"
+        )
         if not os.path.exists(model_path):
-            raise FileNotFoundError(f"You passed an invalid checkpoint file: {checkpoint}.")
+            raise FileNotFoundError(
+                f"You passed an invalid checkpoint file: {checkpoint}."
+            )
 
     # load checkpoint
     checkpoint = torch.load(model_path, map_location=torch.device("cpu"))
@@ -35,16 +39,22 @@ def load_model(checkpoint: str,
     state_dict = checkpoint["state_dict"]
 
     # instantiate preprocessor
-    preprocessor = Preprocessor(hop_size=step_size, sampling_rate=sampling_rate, **hcqt_params)
+    preprocessor = Preprocessor(
+        hop_size=step_size, sampling_rate=sampling_rate, **hcqt_params
+    )
 
     # instantiate PESTO encoder
     encoder = Resnet1d(**hparams["encoder"])
 
     # instantiate main PESTO module and load its weights
-    model = PESTO(encoder,
-                  preprocessor=preprocessor,
-                  crop_kwargs=hparams["pitch_shift"],
-                  reduction=hparams["reduction"])
+    pesto_args = dict(
+        preprocessing=preprocessor,
+        crop_kwargs=hparams["pitch_shift"],
+    )
+    if "reduction" in hparams:
+        pesto_args["reduction"] = hparams["reduction"]
+
+    model = PESTO(encoder, **pesto_args)
     model.load_state_dict(state_dict, strict=False)
     model.eval()
 
