@@ -48,7 +48,7 @@ def load_model(
 
     # instantiate main PESTO module and load its weights
     pesto_args = dict(
-        preprocessing=preprocessor,
+        preprocessor=preprocessor,
         crop_kwargs=hparams["pitch_shift"],
     )
     if "reduction" in hparams:
