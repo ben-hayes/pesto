@@ -29,7 +29,6 @@ class ToeplitzLinear(nn.Conv1d):
         output = fft_conv(
             input,
             self.weight,
-            kernel_size=self.kernel_size,
             stride=1,
             padding=self.padding,
         )
