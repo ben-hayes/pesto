@@ -15,7 +15,7 @@ def reduce_activations(activations: torch.Tensor, reduction: str = "alwa") -> to
     device = activations.device
     num_bins = activations.size(-1)
     bps, r = divmod(num_bins, 200)
-    # assert r == 0, f"Activations should have output size 128*bins_per_semitone, got {num_bins}."
+    assert r == 0, f"Activations should have output size 200*bins_per_semitone, got {num_bins}."
 
     if reduction == "argmax":
         pred = activations.argmax(dim=-1)
