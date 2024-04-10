@@ -12,6 +12,7 @@ from scipy.signal import get_window
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from julius.fftconv import fft_conv1d
 
 
 def broadcast_dim(x):
@@ -326,8 +327,8 @@ class CQT(nn.Module):
             x = padding(x)
 
         # CQT
-        CQT_real = F.conv1d(x, self.cqt_kernels_real, stride=self.hop_length)
-        CQT_imag = -F.conv1d(x, self.cqt_kernels_imag, stride=self.hop_length)
+        CQT_real = fft_conv1d(x, self.cqt_kernels_real, stride=self.hop_length)
+        CQT_imag = -fft_conv1d(x, self.cqt_kernels_imag, stride=self.hop_length)
 
         if normalization_type == "librosa":
             CQT_real *= torch.sqrt(self.lenghts.view(-1, 1))
