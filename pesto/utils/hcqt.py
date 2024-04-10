@@ -124,7 +124,7 @@ def create_cqt_kernels(
 
     # get max window length depending on gamma value
     max_len = int(max(lengths))
-    fftLen = int(2 ** (np.ceil(np.log2(max_len))))
+    fftLen = int(2 ** (np.ceil(np.log2(max_len)) - 1))
 
     tempKernel = np.zeros((int(n_bins), int(fftLen)), dtype=np.complex64)
     specKernel = np.zeros((int(n_bins), int(fftLen)), dtype=np.complex64)
