@@ -229,6 +229,8 @@ class PESTO(nn.Module):
             "shift", torch.zeros((), dtype=torch.float), persistent=True
         )
 
+        self._shift_cpu = None
+
     def to_matmul(self):
         self.encoder.toeplitz_to_matmul()
 
@@ -255,6 +257,9 @@ class PESTO(nn.Module):
                 shape (batch_size?, num_timesteps)
             activations (torch.Tensor): activations of the model, shape (batch_size?, num_timesteps, output_dim)
         """
+        if self._shift_cpu is None:
+            self._shift_cpu = self.shift.cpu().item()
+
         batch_size = audio_waveforms.size(0) if audio_waveforms.ndim == 2 else None
         x = self.preprocessor(audio_waveforms, sr=sr)
         x = self.crop_cqt(x)  # the CQT has to be cropped beforehand
@@ -276,7 +281,7 @@ class PESTO(nn.Module):
             activations = activations.view(batch_size, -1, activations.size(-1))
 
         activations = activations.roll(
-            -round(self.shift.cpu().item() * self.bins_per_semitone), -1
+            -round(self._shift_cpu * self.bins_per_semitone), -1
         )
 
         preds = reduce_activations(activations, reduction=self.reduction)
