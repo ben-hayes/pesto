@@ -48,7 +48,7 @@ class ToeplitzMatmul(nn.Module):
         self.weight = nn.Parameter(weight, requires_grad=False)
 
     def _get_weight(self, weight, in_features, out_features):
-        t = torch.arange(out_features)[None, :] - torch.arange(in_features)[:, None] + out_features - 1
+        t = -torch.arange(out_features)[:, None] + torch.arange(in_features)[None, :] + out_features - 1
         t = t.to(weight.device)
         return weight[..., t][0, 0]
 
