@@ -380,7 +380,12 @@ class CQT(nn.Module):
                 if self.pad_mode == "constant":
                     padding = nn.ConstantPad1d(length.item() // 2, 0)
                 elif self.pad_mode == "reflect":
-                    padding = nn.ReflectionPad1d(length.item() // 2)
+                    if length % 2 == 1:
+                        end_padding = length.item() // 2 + 1
+                    else:
+                        end_padding = length.item() // 2
+
+                    padding = nn.ReflectionPad1d((length.item() // 2, end_padding))
 
                 x = padding(x_)
 
