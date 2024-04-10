@@ -153,100 +153,22 @@ def create_cqt_kernels(
     return tempKernel, fftLen, torch.tensor(lengths).float(), freqs
 
 class CQT(nn.Module):
-    """This function is to calculate the CQT of the input signal.
-    Input signal should be in either of the following shapes.\n
-    1. ``(len_audio)``\n
-    2. ``(num_audio, len_audio)``\n
-    3. ``(num_audio, 1, len_audio)``
-
-    The correct shape will be inferred autommatically if the input follows these 3 shapes.
-    Most of the arguments follow the convention from librosa.
-    This class inherits from ``nn.Module``, therefore, the usage is same as ``nn.Module``.
-
-    This alogrithm uses the resampling method proposed in [1].
+    """
+    This algorithm is using the resampling method proposed in [1].
     Instead of convoluting the STFT results with a gigantic CQT kernel covering the full frequency
-    spectrum, we make a small CQT kernel covering only the top octave. Then we keep downsampling the
-    input audio by a factor of 2 to convoluting it with the small CQT kernel.
-    Everytime the input audio is downsampled, the CQT relative to the downsampled input is equivalent
-    to the next lower octave.
-    The kernel creation process is still same as the 1992 algorithm. Therefore, we can reuse the
-    code from the 1992 alogrithm [2]
+    spectrum, we make a small CQT kernel covering only the top octave.
+    Then we keep downsampling the input audio by a factor of 2 to convoluting it with the
+    small CQT kernel. Everytime the input audio is downsampled, the CQT relative to the downsampled
+    input is equavalent to the next lower octave.
+    The kernel creation process is still same as the 1992 algorithm. Therefore, we can reuse the code
+    from the 1992 alogrithm [2]
     [1] Schörkhuber, Christian. “CONSTANT-Q TRANSFORM TOOLBOX FOR MUSIC PROCESSING.” (2010).
     [2] Brown, Judith C.C. and Miller Puckette. “An efficient algorithm for the calculation of a
     constant Q transform.” (1992).
-
-    Early downsampling factor is to downsample the input audio to reduce the CQT kernel size.
+    early downsampling factor is to downsample the input audio to reduce the CQT kernel size.
     The result with and without early downsampling are more or less the same except in the very low
     frequency region where freq < 40Hz.
-
-    Parameters
-    ----------
-    sr : int
-        The sampling rate for the input audio. It is used to calucate the correct ``fmin`` and ``fmax``.
-        Setting the correct sampling rate is very important for calculating the correct frequency.
-
-    hop_length : int
-        The hop (or stride) size. Default value is 512.
-
-    fmin : float
-        The frequency for the lowest CQT bin. Default is 32.70Hz, which coresponds to the note C0.
-
-    fmax : float
-        The frequency for the highest CQT bin. Default is ``None``, therefore the higest CQT bin is
-        inferred from the ``n_bins`` and ``bins_per_octave``.  If ``fmax`` is not ``None``, then the
-        argument ``n_bins`` will be ignored and ``n_bins`` will be calculated automatically.
-        Default is ``None``
-
-    n_bins : int
-        The total numbers of CQT bins. Default is 84. Will be ignored if ``fmax`` is not ``None``.
-
-    bins_per_octave : int
-        Number of bins per octave. Default is 12.
-
-    norm : bool
-        Normalization for the CQT result.
-
-    basis_norm : int
-        Normalization for the CQT kernels. ``1`` means L1 normalization, and ``2`` means L2 normalization.
-        Default is ``1``, which is same as the normalization used in librosa.
-
-    window : str
-        The windowing function for CQT. It uses ``scipy.signal.get_window``, please refer to
-        scipy documentation for possible windowing functions. The default value is 'hann'
-
-    pad_mode : str
-        The padding method. Default value is 'reflect'.
-
-    trainable : bool
-        Determine if the CQT kernels are trainable or not. If ``True``, the gradients for CQT kernels
-        will also be caluclated and the CQT kernels will be updated during model training.
-        Default value is ``False``
-
-    output_format : str
-        Determine the return type.
-        'Magnitude' will return the magnitude of the STFT result, shape = ``(num_samples, freq_bins, time_steps)``;
-        'Complex' will return the STFT result in complex number, shape = ``(num_samples, freq_bins, time_steps, 2)``;
-        'Phase' will return the phase of the STFT reuslt, shape = ``(num_samples, freq_bins,time_steps, 2)``.
-        The complex number is stored as ``(real, imag)`` in the last axis. Default value is 'Magnitude'.
-
-    verbose : bool
-        If ``True``, it shows layer information. If ``False``, it suppresses all prints.
-
-    Returns
-    -------
-    spectrogram : torch.tensor
-    It returns a tensor of spectrograms.
-    shape = ``(num_samples, freq_bins,time_steps)`` if ``output_format='Magnitude'``;
-    shape = ``(num_samples, freq_bins,time_steps, 2)`` if ``output_format='Complex' or 'Phase'``;
-
-    Examples
-    --------
-    >>> spec_layer = Spectrogram.CQT2010v2()
-    >>> specs = spec_layer(x)
     """
-
-    # To DO:
-    # need to deal with the filter and other tensors
 
     def __init__(
         self,
@@ -255,15 +177,16 @@ class CQT(nn.Module):
         fmin=32.70,
         fmax=None,
         n_bins=84,
-        filter_scale=1,
         bins_per_octave=12,
         norm=True,
         basis_norm=1,
         window="hann",
         pad_mode="reflect",
-        earlydownsample=True,
-        trainable=False,
+        trainable_STFT=False,
+        filter_scale=1,
+        trainable_CQT=False,
         output_format="Magnitude",
+        earlydownsample=True,
         verbose=True,
     ):
 
@@ -276,32 +199,27 @@ class CQT(nn.Module):
         self.hop_length = hop_length
         self.pad_mode = pad_mode
         self.n_bins = n_bins
-        self.earlydownsample = (
-            earlydownsample  # We will activate early downsampling later if possible
-        )
-        self.trainable = trainable
         self.output_format = output_format
+        self.earlydownsample = (
+            earlydownsample  # TODO: activate early downsampling later if possible
+        )
 
-        # It will be used to calculate filter_cutoff and creating CQT kernels
+        # This will be used to calculate filter_cutoff and creating CQT kernels
         Q = float(filter_scale) / (2 ** (1 / bins_per_octave) - 1)
 
         # Creating lowpass filter and make it a torch tensor
         if verbose == True:
             print("Creating low pass filter ...", end="\r")
         start = time()
-        # self.lowpass_filter = torch.tensor(
-        #                                     create_lowpass_filter(
-        #                                     band_center = 0.50,
-        #                                     kernelLength=256,
-        #                                     transitionBandwidth=0.001))
         lowpass_filter = torch.tensor(
             create_lowpass_filter(
-                band_center=0.50, kernelLength=256, transitionBandwidth=0.001
+                band_center=0.5, kernelLength=256, transitionBandwidth=0.001
             )
         )
 
         # Broadcast the tensor to the shape that fits conv1d
         self.register_buffer("lowpass_filter", lowpass_filter[None, None, :])
+
         if verbose == True:
             print(
                 "Low pass filter created, time used = {:.4f} seconds".format(
@@ -309,12 +227,11 @@ class CQT(nn.Module):
                 )
             )
 
-        # Caluate num of filter requires for the kernel
+        # Calculate num of filter requires for the kernel
         # n_octaves determines how many resampling requires for the CQT
         n_filters = min(bins_per_octave, n_bins)
         self.n_octaves = int(np.ceil(float(n_bins) / bins_per_octave))
-        if verbose == True:
-            print("num_octave = ", self.n_octaves)
+        # print("n_octaves = ", self.n_octaves)
 
         # Calculate the lowest frequency bin for the top octave kernel
         self.fmin_t = fmin * 2 ** (self.n_octaves - 1)
@@ -334,7 +251,7 @@ class CQT(nn.Module):
         if fmax_t > sr / 2:
             raise ValueError(
                 "The top bin {}Hz has exceeded the Nyquist frequency, \
-                            please reduce the n_bins".format(
+                              please reduce the n_bins".format(
                     fmax_t
                 )
             )
@@ -354,12 +271,12 @@ class CQT(nn.Module):
             ) = get_early_downsample_params(
                 sr, hop_length, fmax_t, Q, self.n_octaves, verbose
             )
-            self.register_buffer("early_downsample_filter", early_downsample_filter)
 
+            self.register_buffer("early_downsample_filter", early_downsample_filter)
             if verbose == True:
                 print(
                     "Early downsampling filter created, \
-                        time used = {:.4f} seconds".format(
+                            time used = {:.4f} seconds".format(
                         time() - start
                     )
                 )
@@ -369,8 +286,10 @@ class CQT(nn.Module):
         # Preparing CQT kernels
         if verbose == True:
             print("Creating CQT kernels ...", end="\r")
+
         start = time()
-        basis, self.n_fft, lenghts, _ = create_cqt_kernels(
+        # print("Q = {}, fmin_t = {}, n_filters = {}".format(Q, self.fmin_t, n_filters))
+        basis, self.n_fft, _, _ = create_cqt_kernels(
             Q,
             sr,
             self.fmin_t,
@@ -379,10 +298,8 @@ class CQT(nn.Module):
             norm=basis_norm,
             topbin_check=False,
         )
-        # For normalization in the end
-        # The freqs returned by create_cqt_kernels cannot be used
-        # Since that returns only the top octave bins
-        # We need the information for all freq bin
+
+        # This is for the normalization in the end
         freqs = fmin * 2.0 ** (np.r_[0:n_bins] / np.double(bins_per_octave))
         self.frequencies = freqs
 
@@ -391,26 +308,66 @@ class CQT(nn.Module):
         self.register_buffer("lenghts", lenghts)
 
         self.basis = basis
-        # These cqt_kernel is already in the frequency domain
-        cqt_kernels_real = torch.tensor(basis.real).unsqueeze(1)
-        cqt_kernels_imag = torch.tensor(basis.imag).unsqueeze(1)
+        fft_basis = fft(basis)[
+            :, : self.n_fft // 2 + 1
+        ]  # Convert CQT kenral from time domain to freq domain
 
-        if trainable:
-            cqt_kernels_real = nn.Parameter(cqt_kernels_real, requires_grad=trainable)
-            cqt_kernels_imag = nn.Parameter(cqt_kernels_imag, requires_grad=trainable)
+        # These cqt_kernel is already in the frequency domain
+        cqt_kernels_real = torch.tensor(fft_basis.real)
+        cqt_kernels_imag = torch.tensor(fft_basis.imag)
+
+        if verbose == True:
+            print(
+                "CQT kernels created, time used = {:.4f} seconds".format(time() - start)
+            )
+
+        # print("Getting cqt kernel done, n_fft = ",self.n_fft)
+        # Preparing kernels for Short-Time Fourier Transform (STFT)
+        # We set the frequency range in the CQT filter instead of here.
+
+        if verbose == True:
+            print("Creating STFT kernels ...", end="\r")
+
+        start = time()
+        kernel_sin, kernel_cos, self.bins2freq, _, window = create_fourier_kernels(
+            self.n_fft, window="ones", freq_scale="no"
+        )
+        wsin = kernel_sin * window
+        wcos = kernel_cos * window
+
+        wsin = torch.tensor(wsin)
+        wcos = torch.tensor(wcos)
+
+        if verbose == True:
+            print(
+                "STFT kernels created, time used = {:.4f} seconds".format(
+                    time() - start
+                )
+            )
+
+        if trainable_STFT:
+            wsin = nn.Parameter(wsin, requires_grad=trainable_STFT)
+            wcos = nn.Parameter(wcos, requires_grad=trainable_STFT)
+            self.register_parameter("wsin", wsin)
+            self.register_parameter("wcos", wcos)
+        else:
+            self.register_buffer("wsin", wsin)
+            self.register_buffer("wcos", wcos)
+
+        if trainable_CQT:
+            cqt_kernels_real = nn.Parameter(
+                cqt_kernels_real, requires_grad=trainable_CQT
+            )
+            cqt_kernels_imag = nn.Parameter(
+                cqt_kernels_imag, requires_grad=trainable_CQT
+            )
             self.register_parameter("cqt_kernels_real", cqt_kernels_real)
             self.register_parameter("cqt_kernels_imag", cqt_kernels_imag)
         else:
             self.register_buffer("cqt_kernels_real", cqt_kernels_real)
             self.register_buffer("cqt_kernels_imag", cqt_kernels_imag)
 
-        if verbose == True:
-            print(
-                "CQT kernels created, time used = {:.4f} seconds".format(time() - start)
-            )
-        # print("Getting cqt kernel done, n_fft = ",self.n_fft)
-
-        # If center==True, the STFT window will be put in the middle, and paddings at the beginning
+            # If center==True, the STFT window will be put in the middle, and paddings at the beginning
         # and ending are required.
         if self.pad_mode == "constant":
             self.padding = nn.ConstantPad1d(self.n_fft // 2, 0)
@@ -438,35 +395,41 @@ class CQT(nn.Module):
                 x, self.early_downsample_filter, self.downsample_factor
             )
         hop = self.hop_length
-        CQT = get_cqt_complex(
-            x, self.cqt_kernels_real, self.cqt_kernels_imag, hop, self.padding
-        )  # Getting the top octave CQT
+
+        CQT = get_cqt_complex2(
+            x,
+            self.cqt_kernels_real,
+            self.cqt_kernels_imag,
+            hop,
+            self.padding,
+            wcos=self.wcos,
+            wsin=self.wsin,
+        )
 
         x_down = x  # Preparing a new variable for downsampling
-
         for i in range(self.n_octaves - 1):
             hop = hop // 2
             x_down = downsampling_by_2(x_down, self.lowpass_filter)
-            CQT1 = get_cqt_complex(
-                x_down, self.cqt_kernels_real, self.cqt_kernels_imag, hop, self.padding
+
+            CQT1 = get_cqt_complex2(
+                x_down,
+                self.cqt_kernels_real,
+                self.cqt_kernels_imag,
+                hop,
+                self.padding,
+                wcos=self.wcos,
+                wsin=self.wsin,
             )
             CQT = torch.cat((CQT1, CQT), 1)
 
-        CQT = CQT[:, -self.n_bins :, :]  # Removing unwanted bottom bins
-        # print("downsample_factor = ",self.downsample_factor)
-        # print(CQT.shape)
-        # print(self.lenghts.view(-1,1).shape)
+        CQT = CQT[:, -self.n_bins :, :]  # Removing unwanted top bins
 
-        # Normalizing the output with the downsampling factor, 2**(self.n_octaves-1) is make it
-        # same mag as 1992
-        CQT = CQT * self.downsample_factor
-        # Normalize again to get same result as librosa
         if normalization_type == "librosa":
-            CQT = CQT * torch.sqrt(self.lenghts.view(-1, 1, 1))
+            CQT *= torch.sqrt(self.lenghts.view(-1, 1, 1)) / self.n_fft
         elif normalization_type == "convolutional":
             pass
         elif normalization_type == "wrap":
-            CQT *= 2
+            CQT *= 2 / self.n_fft
         else:
             raise ValueError(
                 "The normalization_type %r is not part of our current options."
@@ -474,11 +437,8 @@ class CQT(nn.Module):
             )
 
         if output_format == "Magnitude":
-            if self.trainable == False:
-                # Getting CQT Amplitude
-                return torch.sqrt(CQT.pow(2).sum(-1))
-            else:
-                return torch.sqrt(CQT.pow(2).sum(-1) + 1e-8)
+            # Getting CQT Amplitude
+            return torch.sqrt(CQT.pow(2).sum(-1))
 
         elif output_format == "Complex":
             return CQT
@@ -487,6 +447,13 @@ class CQT(nn.Module):
             phase_real = torch.cos(torch.atan2(CQT[:, :, :, 1], CQT[:, :, :, 0]))
             phase_imag = torch.sin(torch.atan2(CQT[:, :, :, 1], CQT[:, :, :, 0]))
             return torch.stack((phase_real, phase_imag), -1)
+
+    def extra_repr(self) -> str:
+        return "STFT kernel size = {}, CQT kernel size = {}".format(
+            (*self.wcos.shape,), (*self.cqt_kernels_real.shape,)
+        )
+
+
 
 class CQTold(nn.Module):
     """This function is to calculate the CQT of the input signal.
