@@ -430,6 +430,7 @@ class HarmonicCQT(nn.Module):
         bins_per_semitone: int = 1,
         n_bins: int = 84,
         center_bins: bool = True,
+        kernel_groups: int = 4,
     ):
         super(HarmonicCQT, self).__init__()
 
@@ -446,6 +447,7 @@ class HarmonicCQT(nn.Module):
                     n_bins=n_bins,
                     bins_per_octave=12 * bins_per_semitone,
                     output_format="Complex",
+                    kernel_groups=kernel_groups,
                 )
                 for h in harmonics
             ]
