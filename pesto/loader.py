@@ -36,6 +36,7 @@ def load_model(
     checkpoint = torch.load(model_path, map_location=torch.device("cpu"))
     hparams = checkpoint["hparams"]
     hcqt_params = checkpoint["hcqt_params"]
+    hcqt_params["kernel_groups"] = hcqt_params.get("kernel_groups", 10)
     state_dict = checkpoint["state_dict"]
 
     # instantiate preprocessor

@@ -3,6 +3,7 @@ Due to conflicts between some versions of NumPy and nnAudio, we use the implemen
 to the requirements of this project. Compared to the original implementation, some minor modifications have been done
 in the code, however the behaviour remains the same.
 """
+
 from typing import Optional
 
 import numpy as np
@@ -79,17 +80,17 @@ def get_window_dispatch(window, N, fftbins=True):
 
 
 def create_cqt_kernels(
-        Q,
-        fs,
-        fmin: float,
-        n_bins=84,
-        bins_per_octave=12,
-        norm=1,
-        window="hann",
-        fmax: Optional[float] = None,
-        topbin_check=True,
-        gamma=0,
-        pad_fft=True
+    Q,
+    fs,
+    fmin: float,
+    n_bins=84,
+    bins_per_octave=12,
+    norm=1,
+    window="hann",
+    fmax: Optional[float] = None,
+    topbin_check=True,
+    gamma=0,
+    pad_fft=True,
 ):
     """
     Automatically create CQT kernels in time domain
@@ -142,12 +143,16 @@ def create_cqt_kernels(
             start = int(np.ceil(fftLen / 2.0 - l / 2.0))
 
         window_dispatch = get_window_dispatch(window, int(l), fftbins=True)
-        sig = window_dispatch * np.exp(np.r_[-l // 2: l // 2] * 1j * 2 * np.pi * freq / fs) / l
+        sig = (
+            window_dispatch
+            * np.exp(np.r_[-l // 2 : l // 2] * 1j * 2 * np.pi * freq / fs)
+            / l
+        )
 
         if norm:  # Normalizing the filter # Trying to normalize like librosa
-            tempKernel[k, start: start + int(l)] = sig / np.linalg.norm(sig, norm)
+            tempKernel[k, start : start + int(l)] = sig / np.linalg.norm(sig, norm)
         else:
-            tempKernel[k, start: start + int(l)] = sig
+            tempKernel[k, start : start + int(l)] = sig
         # specKernel[k, :] = fft(tempKernel[k])
 
     # return specKernel[:,:fftLen//2+1], fftLen, torch.tensor(lenghts).float()
@@ -246,20 +251,21 @@ class CQT(nn.Module):
     """
 
     def __init__(
-            self,
-            sr=22050,
-            hop_length=512,
-            fmin=32.70,
-            fmax=None,
-            n_bins=84,
-            bins_per_octave=12,
-            filter_scale=1,
-            norm=1,
-            window="hann",
-            center=True,
-            pad_mode="reflect",
-            trainable=False,
-            output_format="Magnitude"
+        self,
+        sr=22050,
+        hop_length=512,
+        fmin=32.70,
+        fmax=None,
+        n_bins=84,
+        bins_per_octave=12,
+        filter_scale=1,
+        norm=1,
+        kernel_groups=4,
+        window="hann",
+        center=True,
+        pad_mode="reflect",
+        trainable=False,
+        output_format="Magnitude",
     ):
 
         super().__init__()
@@ -277,20 +283,55 @@ class CQT(nn.Module):
             Q, sr, fmin, n_bins, bins_per_octave, norm, window, fmax
         )
 
+        self._n_kernel_groups = kernel_groups
+
+        n_kernels = cqt_kernels.shape[0]
+        if n_kernels % self._n_kernel_groups == 0:
+            kernels_per_group = n_kernels // self._n_kernel_groups
+        else:
+            kernels_per_group = n_kernels // self._n_kernel_groups + 1
+
+        kernel_groups = []
+        kernel_lengths = []
+        for i in range(self._n_kernel_groups):
+            kernels = cqt_kernels[i * kernels_per_group : (i + 1) * kernels_per_group]
+            max_length = lenghts[i * kernels_per_group].long()
+
+            # trim kernels to the central part
+            start = (self.kernel_width - max_length) // 2
+            end = start + max_length
+            kernels = kernels[:, start:end]
+
+            kernel_groups.append(kernels)
+            kernel_lengths.append(max_length)
+
+        for i, (kernels, length) in enumerate(zip(kernel_groups, kernel_lengths)):
+            self.register_buffer(
+                f"kernels_real_{i}", torch.tensor(kernels.real).unsqueeze(1)
+            )
+            self.register_buffer(
+                f"kernels_imag_{i}", torch.tensor(kernels.imag).unsqueeze(1)
+            )
+            self.register_buffer(f"length_{i}", length)
+
         self.register_buffer("lenghts", lenghts)
         self.frequencies = freqs
 
-        cqt_kernels_real = torch.tensor(cqt_kernels.real).unsqueeze(1)
-        cqt_kernels_imag = torch.tensor(cqt_kernels.imag).unsqueeze(1)
+    @property
+    def kernel_groups_real(self):
+        return [
+            getattr(self, f"kernels_real_{i}") for i in range(self._n_kernel_groups)
+        ]
 
-        if trainable:  # NOTE: can't it be factorized?
-            cqt_kernels_real = nn.Parameter(cqt_kernels_real, requires_grad=trainable)
-            cqt_kernels_imag = nn.Parameter(cqt_kernels_imag, requires_grad=trainable)
-            self.register_parameter("cqt_kernels_real", cqt_kernels_real)
-            self.register_parameter("cqt_kernels_imag", cqt_kernels_imag)
-        else:
-            self.register_buffer("cqt_kernels_real", cqt_kernels_real)
-            self.register_buffer("cqt_kernels_imag", cqt_kernels_imag)
+    @property
+    def kernel_groups_imag(self):
+        return [
+            getattr(self, f"kernels_imag_{i}") for i in range(self._n_kernel_groups)
+        ]
+
+    @property
+    def kernel_group_lengths(self):
+        return [getattr(self, f"length_{i}") for i in range(self._n_kernel_groups)]
 
     def forward(self, x, output_format=None, normalization_type="librosa"):
         """
@@ -320,17 +361,34 @@ class CQT(nn.Module):
         output_format = output_format or self.output_format
 
         x = broadcast_dim(x)
-        if self.center:
-            if self.pad_mode == "constant":
-                padding = nn.ConstantPad1d(self.kernel_width // 2, 0)
-            elif self.pad_mode == "reflect":
-                padding = nn.ReflectionPad1d(self.kernel_width // 2)
 
-            x = padding(x)
+        # # CQT
+        # CQT_real = F.conv1d(x, self.cqt_kernels_real, stride=self.hop_length)
+        # CQT_imag = -F.conv1d(x, self.cqt_kernels_imag, stride=self.hop_length)
 
-        # CQT
-        CQT_real = F.conv1d(x, self.cqt_kernels_real, stride=self.hop_length)
-        CQT_imag = -F.conv1d(x, self.cqt_kernels_imag, stride=self.hop_length)
+        kernel_groups_real = self.kernel_groups_real
+        kernel_groups_imag = self.kernel_groups_imag
+        kernel_group_lengths = self.kernel_group_lengths
+
+        cqt_real = []
+        cqt_imag = []
+        x_ = x
+        for cqt_kernel_real, cqt_kernel_imag, length in zip(
+            kernel_groups_real, kernel_groups_imag, kernel_group_lengths
+        ):
+            if self.center:
+                if self.pad_mode == "constant":
+                    padding = nn.ConstantPad1d(length.item() // 2, 0)
+                elif self.pad_mode == "reflect":
+                    padding = nn.ReflectionPad1d(length.item() // 2)
+
+                x = padding(x_)
+
+            cqt_real.append(F.conv1d(x, cqt_kernel_real, stride=self.hop_length))
+            cqt_imag.append(-F.conv1d(x, cqt_kernel_imag, stride=self.hop_length))
+
+        CQT_real = torch.cat(cqt_real, dim=1)
+        CQT_imag = torch.cat(cqt_imag, dim=1)
 
         if normalization_type == "librosa":
             CQT_real *= torch.sqrt(self.lenghts.view(-1, 1))
@@ -361,27 +419,37 @@ class CQT(nn.Module):
 
 class HarmonicCQT(nn.Module):
     r"""Harmonic CQT layer, as described in Bittner et al. (20??)"""
+
     def __init__(
-            self,
-            harmonics,
-            sr: int = 22050,
-            hop_length: int = 512,
-            fmin: float = 32.7,
-            fmax: Optional[float] = None,
-            bins_per_semitone: int = 1,
-            n_bins: int = 84,
-            center_bins: bool = True
+        self,
+        harmonics,
+        sr: int = 22050,
+        hop_length: int = 512,
+        fmin: float = 32.7,
+        fmax: Optional[float] = None,
+        bins_per_semitone: int = 1,
+        n_bins: int = 84,
+        center_bins: bool = True,
     ):
         super(HarmonicCQT, self).__init__()
 
         if center_bins:
             fmin = fmin / 2 ** ((bins_per_semitone - 1) / (24 * bins_per_semitone))
 
-        self.cqt_kernels = nn.ModuleList([
-            CQT(sr=sr, hop_length=hop_length, fmin=h*fmin, fmax=fmax, n_bins=n_bins,
-                bins_per_octave=12*bins_per_semitone, output_format="Complex")
-            for h in harmonics
-        ])
+        self.cqt_kernels = nn.ModuleList(
+            [
+                CQT(
+                    sr=sr,
+                    hop_length=hop_length,
+                    fmin=h * fmin,
+                    fmax=fmax,
+                    n_bins=n_bins,
+                    bins_per_octave=12 * bins_per_semitone,
+                    output_format="Complex",
+                )
+                for h in harmonics
+            ]
+        )
 
     def forward(self, audio_waveforms: torch.Tensor):
         r"""Converts a batch of waveforms into a batch of HCQTs.
