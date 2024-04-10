@@ -34,6 +34,27 @@ class ToeplitzLinear(nn.Conv1d):
         )
         return output.squeeze(-2)
 
+    def to_matmul(self):
+        return ToeplitzMatmul(self)
+
+
+class ToeplitzMatmul(nn.Module):
+    def __init__(self, toep_conv: ToeplitzLinear):
+        super(ToeplitzMatmul, self).__init__()
+        out_features = toep_conv.padding + 1
+        in_features = toep_conv.kernel_size[-1] - out_features + 1
+
+        weight = self._get_weight(toep_conv.weight, in_features, out_features)
+        self.weight = nn.Parameter(weight, requires_grad=False)
+
+    def _get_weight(self, weight, in_features, out_features):
+        t = torch.arange(out_features)[None, :] - torch.arange(in_features)[:, None] + out_features - 1
+        t = t.to(weight.device)
+        return weight[..., t][0, 0]
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return torch.einsum("mn,bn->bm", self.weight, input)
+
 
 class Resnet1d(nn.Module):
     """
@@ -156,6 +177,9 @@ class Resnet1d(nn.Module):
 
         self.final_norm = nn.Softmax(dim=-1)
 
+    def toeplitz_to_matmul(self):
+        self.fc = self.fc.to_matmul()
+
     def forward(self, x):
         r"""
 
@@ -204,6 +228,9 @@ class PESTO(nn.Module):
         self.register_buffer(
             "shift", torch.zeros((), dtype=torch.float), persistent=True
         )
+
+    def to_matmul(self):
+        self.encoder.toeplitz_to_matmul()
 
     def forward(
         self,
